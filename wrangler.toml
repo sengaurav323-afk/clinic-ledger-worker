@@ -1,8 +1,8 @@
-﻿name = "clinic-ledger-worker"
+name = "clinic-ledger-worker"
 main = "src/index.js"
 compatibility_date = "2024-01-01"
 
 [vars]
-RAZORPAY_KEY_ID = "rzp_test_TbF4ZgZFurK0yh"
+RAZORPAY_KEY_ID = "rzp_test_TbRq9ewkmE5URn"
 FIREBASE_PROJECT_ID = "curevona"
 ALLOWED_ORIGIN = "https://curevona.web.app"
