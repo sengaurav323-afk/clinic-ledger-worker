@@ -5,4 +5,4 @@ compatibility_date = "2024-01-01"
 [vars]
 RAZORPAY_KEY_ID = "rzp_test_TbRq9ewkmE5URn"
 FIREBASE_PROJECT_ID = "curevona"
-ALLOWED_ORIGIN = "https://curevona.web.app"
+ALLOWED_ORIGIN = "https://curevona.world,https://www.curevona.world,https://curevona.web.app"

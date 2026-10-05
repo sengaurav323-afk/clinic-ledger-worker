@@ -443,7 +443,7 @@ async function handleSyncStatus(request, env) {
   }
 }
 
-export default {
+const workerHandler = {
   async fetch(request, env) {
     if (request.method === "OPTIONS") {
       return new Response(null, { headers: corsHeaders(env) });
@@ -540,3 +540,19 @@ async function handleScan(request, env) {
   catch (e) { return json({ error: "No readable information was detected" }, 422, env); }
   return json({ result: cleanScan(parsed) }, 200, env);
 }
+
+;
+export default {
+  async fetch(request, env, ctx) {
+    const res = await workerHandler.fetch(request, env, ctx);
+    const origin = request.headers.get("Origin");
+    const allowed = String(env.ALLOWED_ORIGIN || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+    const headers = new Headers(res.headers);
+    headers.delete("Access-Control-Allow-Origin");
+    if (origin && allowed.indexOf(origin) >= 0) {
+      headers.set("Access-Control-Allow-Origin", origin);
+      headers.append("Vary", "Origin");
+    }
+    return new Response(res.body, { status: res.status, statusText: res.statusText, headers: headers });
+  }
+};
