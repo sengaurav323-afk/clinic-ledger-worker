@@ -443,6 +443,79 @@ async function handleSyncStatus(request, env) {
   }
 }
 
+const contactHits = new Map();
+function contactRateLimited(request) {
+  const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+  const now = Date.now(), windowMs = 10 * 60 * 1000, max = 5;
+  const arr = (contactHits.get(ip) || []).filter(function (t) { return now - t < windowMs; });
+  if (arr.length >= max) { contactHits.set(ip, arr); return true; }
+  arr.push(now); contactHits.set(ip, arr);
+  if (contactHits.size > 500) { for (const k of contactHits.keys()) { contactHits.delete(k); break; } }
+  return false;
+}
+async function handleContact(request, env) {
+  const origin = request.headers.get("Origin");
+  const allowedOrigins = String(env.ALLOWED_ORIGIN || "").split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+  if (!origin || allowedOrigins.indexOf(origin) < 0) return json({ error: "Forbidden" }, 403, env);
+  if (contactRateLimited(request)) return json({ error: "Too many requests" }, 429, env);
+
+  let b;
+  try {
+    const raw = await request.text();
+    if (raw.length > 8000) return json({ error: "Invalid request" }, 413, env);
+    b = JSON.parse(raw);
+  } catch (e) { return json({ error: "Invalid request" }, 400, env); }
+  if (!b || typeof b !== "object") return json({ error: "Invalid request" }, 400, env);
+
+  // Bots fill the hidden field. Pretend it worked and store nothing.
+  if (typeof b.website === "string" && b.website.trim() !== "") return json({ ok: true }, 200, env);
+
+  const name = typeof b.name === "string" ? b.name.trim() : "";
+  const phone = typeof b.phone === "string" ? b.phone.trim() : "";
+  const email = typeof b.email === "string" ? b.email.trim() : "";
+  const message = typeof b.message === "string" ? b.message.trim() : "";
+  const digits = phone.replace(/\D/g, "");
+  const phoneOk = /^\+?[0-9]+$/.test(phone) &&
+    (phone.indexOf("+91") === 0 ? (digits.length === 12 && /^91[6-9]/.test(digits)) : (digits.length >= 10 && digits.length <= 15));
+  const emailOk = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email) && email.length <= 150;
+  if (name.length < 2 || name.length > 100 || !phoneOk || !emailOk || message.length < 5 || message.length > 2000) {
+    return json({ error: "Invalid details" }, 400, env);
+  }
+
+  try {
+    const accessToken = await getGoogleAccessToken(env);
+    const res = await fetch(`${firestoreBaseUrl(env)}/contact_messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ fields: {
+        name: encodeValue(name), phone: encodeValue(phone), email: encodeValue(email), message: encodeValue(message),
+        receivedAt: { timestampValue: new Date().toISOString() }, status: encodeValue("new")
+      } }),
+    });
+    if (!res.ok) { console.error("Contact save failed, status:", res.status); return json({ error: "Could not save" }, 502, env); }
+    // Success is reported only when the email provider accepts the message.
+    if (!env.RESEND_API_KEY || !env.CONTACT_TO_EMAIL) { console.error("Contact email not configured"); return json({ error: "Email not configured" }, 503, env); }
+    let er;
+    try {
+      er = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${env.RESEND_API_KEY}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          from: env.CONTACT_FROM || "Curevona Contact <onboarding@resend.dev>",
+          to: [env.CONTACT_TO_EMAIL],
+          reply_to: email,
+          subject: "Curevona Contact Form Submission",
+          text: "Name: " + name + "\nContact Number: " + phone + "\nEmail: " + email + "\nMessage:\n" + message
+        }),
+      });
+    } catch (e2) { console.error("Contact email error"); return json({ error: "Email failed" }, 502, env); }
+    if (!er.ok) { let dt = ""; try { dt = (await er.text()).slice(0, 300); } catch (e3) {} console.error("Contact email failed, status:", er.status, dt); return json({ error: "Email failed" }, 502, env); }
+    return json({ ok: true }, 200, env);
+  } catch (e) {
+    console.error("Contact save error");
+    return json({ error: "Could not save" }, 500, env);
+  }
+}
 const workerHandler = {
   async fetch(request, env) {
     if (request.method === "OPTIONS") {
@@ -450,6 +523,7 @@ const workerHandler = {
     }
     const url = new URL(request.url);
     if (url.pathname === "/scan" && request.method === "POST") { return handleScan(request, env); }
+    if (url.pathname === "/contact" && request.method === "POST") { return handleContact(request, env); }
     if (url.pathname === "/create-order" && request.method === "POST") {
       return handleCreateOrder(request, env);
     }
